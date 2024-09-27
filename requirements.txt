@@ -1,0 +1,15 @@
+SimpleITK
+numpy
+scikit-image
+nibabel
+torch
+pandas
+p_tqdm
+requests
+acvl_utils
+dynamic_network_architectures
+dicom2nifti
+batchgeneratorsv2
+matplotlib
+seaborn
+monai
