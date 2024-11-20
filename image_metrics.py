@@ -5,22 +5,24 @@ import numpy as np
 from typing import Optional
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from skimage.util.arraycrop import crop
-
+from scipy.signal import fftconvolve
+from scipy.ndimage import uniform_filter
 
 class ImageMetrics():
     def __init__(self):
         # Use fixed wide dynamic range
         self.dynamic_range = [-1024., 3000.]
     
-    def score_patient(self, prediction_path, ground_truth_path, mask_path):        
-        # Calculate image metrics
+    def score_patient(self, gt_img, synthetic_ct, mask):        
+        assert gt_img.shape == synthetic_ct.shape 
+        if mask is not None:
+            assert mask.shape == synthetic_ct.shape 
 
-        print("ImageMetrics", prediction_path, ground_truth_path)
-        # prediction = SimpleITK.GetArrayFromImage(SimpleITK.ReadImage(prediction_path))
-        mask = SimpleITK.GetArrayFromImage(SimpleITK.ReadImage(mask_path))
-        ground_truth = SimpleITK.GetArrayFromImage(SimpleITK.ReadImage(ground_truth_path)) * mask
-        prediction = np.where(mask == 0, -1024, 0)
+        # perform masking on the images
+        ground_truth = gt_img if mask is None else np.where(mask == 0, -1024, gt_img)
+        prediction = synthetic_ct if mask is None else np.where(mask == 0, -1024, synthetic_ct)
         
+        # Compute image similarity within the mask
         mae_value = self.mae(ground_truth,
                              prediction,
                              mask)
@@ -33,10 +35,16 @@ class ImageMetrics():
         ssim_value = self.ssim(ground_truth,
                                prediction, 
                                mask)
+        ms_ssim_value, ms_ssim_mask_value = self.ms_ssim(ground_truth,
+                               prediction, 
+                               mask)
+
         return {
             'mae': mae_value,
             'ssim': ssim_value,
-            'psnr': psnr_value
+            'psnr': psnr_value,
+            'ms_ssim': ms_ssim_value,
+            'ms_ssim (mask)': ms_ssim_mask_value,
         }
     
     def mae(self,
@@ -117,8 +125,231 @@ class ImageMetrics():
         pred = pred[mask==1]
         psnr_value = peak_signal_noise_ratio(gt, pred, data_range=dynamic_range)
         return float(psnr_value)
-    
-    
+    def structural_similarity_contraststructure(self, im1,
+        im2,
+        *,
+        win_size=None,
+        gradient=False,
+        data_range=None,
+        channel_axis=None,
+        gaussian_weights=False,
+        full=False,
+        **kwargs,):
+            K1 = kwargs.pop('K1', 0.01)
+            K2 = kwargs.pop('K2', 0.03)
+            sigma = kwargs.pop('sigma', 1.5)
+            if K1 < 0:
+                raise ValueError("K1 must be positive")
+            if K2 < 0:
+                raise ValueError("K2 must be positive")
+            if sigma < 0:
+                raise ValueError("sigma must be positive")
+            use_sample_covariance = kwargs.pop('use_sample_covariance', True)
+            if gaussian_weights:
+                # Set to give an 11-tap filter with the default sigma of 1.5 to match
+                # Wang et. al. 2004.
+                truncate = 3.5
+
+            if win_size is None:
+                if gaussian_weights:
+                    # set win_size used by crop to match the filter size
+                    r = int(truncate * sigma + 0.5)  # radius as in ndimage
+                    win_size = 2 * r + 1
+                else:
+                    win_size = 7  # backwards compatibility
+            if gaussian_weights:
+                filter_func = gaussian
+                filter_args = {'sigma': sigma, 'truncate': truncate, 'mode': 'reflect'}
+            else:
+                filter_func = uniform_filter
+                filter_args = {'size': win_size}
+
+            ndim = im1.ndim
+            NP = win_size**ndim
+
+            # filter has already normalized by NP
+            if use_sample_covariance:
+                cov_norm = NP / (NP - 1)  # sample covariance
+            else:
+                cov_norm = 1.0  # population covariance to match Wang et. al. 2004
+            # compute (weighted) means
+            ux = filter_func(im1, **filter_args)
+            uy = filter_func(im2, **filter_args)
+
+
+            # compute (weighted) variances and covariances
+            uxx = filter_func(im1 * im1, **filter_args)
+            uyy = filter_func(im2 * im2, **filter_args)
+            uxy = filter_func(im1 * im2, **filter_args)
+            vx = cov_norm * (uxx - ux * ux)
+            vxsqrt = np.clip(vx, a_min=0, a_max=None) ** 0.5 #cov_norm * (uxx - ux * ux)
+            vy = cov_norm * (uyy - uy * uy)
+            vysqrt = np.clip(vy, a_min=0, a_max=None) ** 0.5 #cov_norm * (uyy - uy * uy)
+            vxy = cov_norm * (uxy - ux * uy)
+
+            R = data_range
+            C2 = (K2 * R) ** 2
+            C3 = C2 / 2
+
+            C = (2 * vxsqrt * vysqrt + C2) / (vx + vy + C2)
+            S = (vxy + C3) / (vxsqrt * vysqrt + C3)
+
+            result = C * S
+            # to avoid edge effects will ignore filter radius strip around edges
+            pad = (win_size - 1) // 2
+
+            # compute (weighted) mean of ssim. Use float64 for accuracy.
+            mssim = crop(result, pad).mean(dtype=np.float64)
+
+            if full:
+                return mssim, result
+            return mssim
+
+    def structural_similarity_luminance(self, im1,
+        im2,
+        *,
+        win_size=None,
+        gradient=False,
+        data_range=None,
+        channel_axis=None,
+        gaussian_weights=False,
+        full=False,
+        **kwargs,):
+            K1 = kwargs.pop('K1', 0.01)
+            K2 = kwargs.pop('K2', 0.03)
+            sigma = kwargs.pop('sigma', 1.5)
+            if K1 < 0:
+                raise ValueError("K1 must be positive")
+            if K2 < 0:
+                raise ValueError("K2 must be positive")
+            if sigma < 0:
+                raise ValueError("sigma must be positive")
+            use_sample_covariance = kwargs.pop('use_sample_covariance', True)
+            if gaussian_weights:
+                # Set to give an 11-tap filter with the default sigma of 1.5 to match
+                # Wang et. al. 2004.
+                truncate = 3.5
+
+            if win_size is None:
+                if gaussian_weights:
+                    # set win_size used by crop to match the filter size
+                    r = int(truncate * sigma + 0.5)  # radius as in ndimage
+                    win_size = 2 * r + 1
+                else:
+                    win_size = 7  # backwards compatibility
+            if gaussian_weights:
+                filter_func = gaussian
+                filter_args = {'sigma': sigma, 'truncate': truncate, 'mode': 'reflect'}
+            else:
+                filter_func = uniform_filter
+                filter_args = {'size': win_size}
+
+            ndim = im1.ndim
+            NP = win_size**ndim
+
+            # filter has already normalized by NP
+            if use_sample_covariance:
+                cov_norm = NP / (NP - 1)  # sample covariance
+            else:
+                cov_norm = 1.0  # population covariance to match Wang et. al. 2004
+
+            # compute (weighted) means
+            ux = filter_func(im1, **filter_args)
+            uy = filter_func(im2, **filter_args)
+            R = data_range
+            C1 = (K1 * R) ** 2
+
+            L = (2 * ux * uy + C1) / (ux * ux + uy * uy + C1)
+            # to avoid edge effects will ignore filter radius strip around edges
+            pad = (win_size - 1) // 2
+
+            # compute (weighted) mean of ssim. Use float64 for accuracy.
+            mssim = crop(L, pad).mean(dtype=np.float64)
+
+            if full:
+                return mssim, L
+            return mssim
+
+    def ms_ssim(self, gt: np.ndarray, pred: np.ndarray, mask: Optional[np.ndarray] = None, scale_weights: Optional[np.ndarray] = None) -> float:
+        # Clip gt and pred to the dynamic range
+        gt = np.clip(gt, min(self.dynamic_range), max(self.dynamic_range))
+        pred = np.clip(pred, min(self.dynamic_range), max(self.dynamic_range))
+
+        if mask is not None:
+            #binarize mask
+            mask = np.where(mask>0, 1., 0.)
+            
+            # Mask gt and pred
+            gt = np.where(mask==0, min(self.dynamic_range), gt)
+            pred = np.where(mask==0, min(self.dynamic_range), pred)
+
+        # Make values non-negative
+        if min(self.dynamic_range) < 0:
+            gt = gt - min(self.dynamic_range)
+            pred = pred - min(self.dynamic_range)
+
+        # Set dynamic range for ssim calculation and calculate ssim_map per pixel
+        dynamic_range = self.dynamic_range[1] - self.dynamic_range[0]
+
+
+        scale_weights = np.array([0.0448, 0.2856, 0.3001, 0.2363, 0.1333]) if scale_weights is None else scale_weights / np.sum(scale_weights)
+        levels = len(scale_weights)
+
+        downsample_filter = np.ones((2, 2, 2)) / 8
+
+        gtx, gty, gtz = gt.shape
+
+        target_size = 97
+        pad_x_before = 0 if gtx > target_size else (target_size - gtx)//2
+        pad_x_after  = 0 if gtx > target_size else target_size - gtx - pad_x_before
+        pad_y_before = 0 if gty > target_size else (target_size - gty)//2
+        pad_y_after  = 0 if gty > target_size else target_size - gty - pad_y_before
+        pad_z_before = 0 if gtz > target_size else (target_size - gtz)//2
+        pad_z_after  = 0 if gtz > target_size else target_size - gtz - pad_z_before
+
+        pad_x = (pad_x_before, pad_x_after)
+        pad_y = (pad_y_before, pad_y_after)
+        pad_z = (pad_z_before, pad_z_after)
+
+        gt   = np.pad(gt,   (pad_x, pad_y, pad_z), mode='edge')
+        pred = np.pad(pred, (pad_x, pad_y, pad_z), mode='edge')
+        mask = np.pad(mask, (pad_x, pad_y, pad_z), mode='edge')
+
+        min_size = (downsample_filter.shape[-1] - 1) * 2 ** (levels - 1) + 1
+
+        ms_ssim_vals, ms_ssim_maps = [], []
+        for level in range(levels):
+
+            if level == 0:
+                ssim_value_full, ssim_map = self.structural_similarity_luminance(gt, pred, data_range=dynamic_range, full=True)
+            else:
+                ssim_value_full, ssim_map = self.structural_similarity_contraststructure(gt, pred, data_range=dynamic_range, full=True)
+            pad = 3
+            ssim_value_masked  = (crop(ssim_map, pad)[crop(mask, pad).astype(bool)]).mean(dtype=np.float64)
+
+            ms_ssim_vals.append(ssim_value_full)
+            ms_ssim_maps.append(ssim_value_masked)
+
+            filtered = [fftconvolve(im, downsample_filter, mode='same')
+                for im in [gt, pred]]
+            gt, pred, mask = [x[::2, ::2, ::2] for x in [*filtered, mask]]
+
+
+        print(ms_ssim_vals)
+        ms_ssim_vals = [0 if x <= 0 else (1 if x >= 1 else x) for x in ms_ssim_vals]
+        ms_ssim_maps = [0 if x <= 0 else (1 if x >= 1 else x) for x in ms_ssim_maps]
+
+
+        ms_ssim_val = np.prod(ms_ssim_vals ** scale_weights)
+        ms_ssim_mask_val = np.prod(ms_ssim_maps ** scale_weights)
+        # ms_ssim_final_vals = np.mean(np.prod([ms_ssim_vals ** scale_weights]))
+        # ms_ssim_mask_final_vals = np.mean(np.prod([ms_ssim_maps ** scale_weights]))
+
+        return ms_ssim_val, ms_ssim_mask_val
+
+        # ms_ssim_final_vals = torch.prod((ms_ssim_vals ** scale_weights.view(-1, 1, 1)), dim=0).mean(1)
+        # ms_ssim_mask_final_vals = torch.prod((ms_ssim_maps ** scale_weights.view(-1, 1, 1)), dim=0).mean(1)
+
     def ssim(self,
               gt: np.ndarray, 
               pred: np.ndarray,
