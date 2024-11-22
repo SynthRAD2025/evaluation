@@ -114,7 +114,7 @@ def main():
     metrics['results'] = []
     for p in predictions:
         metrics['results'].append(process(p))
-    # with NestablePool(processes=3) as pool:
+    # with NestablePool(processes=2) as pool:
     #     try:
     #         metrics["results"] = pool.map(process, predictions)
     #     except KeyboardInterrupt:
@@ -141,6 +141,7 @@ def main():
 
 def process(job):
     # Processes a single algorithm job, looking at the outputs
+    gc.collect()
     report = "Processing:\n"
     report += pformat(job)
     report += "\n"
@@ -173,11 +174,14 @@ def process(job):
     image_metrics = image_evaluator.score_patient(gt_img, synthetic_ct, mask)
     print(patient_id, image_metrics)
 
+    gc.collect()
     #... and segmentation metrics
     segmentation_evaluator = SegmentationMetrics()
     seg_metrics = segmentation_evaluator.score_patient(full_sct_path, mask, gt_segmentation, patient_id, orientation=(spacing, origin, direction))
 
+    print(seg_metrics)
     # Finally, return the results
+    gc.collect()
     return {
         **image_metrics,
         **seg_metrics
