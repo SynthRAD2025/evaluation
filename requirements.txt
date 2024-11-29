@@ -2,6 +2,7 @@ SimpleITK
 numpy
 scikit-image
 nibabel
+openvino==2024.5.0
 torch
 pandas
 p_tqdm

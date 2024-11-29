@@ -17,48 +17,26 @@ Any container that shows the same behavior will do, this is purely an example of
 
 Happy programming!
 """
+from torch.multiprocessing import Pool, Process, set_start_method
+set_start_method('spawn', force=True)
 import json
 from glob import glob
 import SimpleITK
 import numpy as np
 import random
-import multiprocessing
-import multiprocessing.pool
-# from multiprocessing import Pool
 from statistics import mean
 from pathlib import Path
 from pprint import pformat, pprint
 from image_metrics import ImageMetrics
 from segmentation_metrics import SegmentationMetrics
 import gc
+import torch
+from functools import partial
+import os
 
 INPUT_DIRECTORY = Path("/input")
 OUTPUT_DIRECTORY = Path("/output")
 GROUND_TRUTH_DIRECTORY = Path("/opt/ml/input/data/ground_truth")
-
-
-
-class NoDaemonProcess(multiprocessing.Process):
-    @property
-    def daemon(self):
-        return False
-
-    @daemon.setter
-    def daemon(self, value):
-        pass
-
-
-class NoDaemonContext(type(multiprocessing.get_context())):
-    Process = NoDaemonProcess
-
-# We sub-class multiprocessing.pool.Pool instead of multiprocessing.Pool
-# because the latter is only a wrapper function, not a proper class.
-class NestablePool(multiprocessing.pool.Pool):
-    def __init__(self, *args, **kwargs):
-        kwargs['context'] = NoDaemonContext()
-        super(NestablePool, self).__init__(*args, **kwargs)
-
-
 
 def tree(dir_path: Path, prefix: str=''):
 
@@ -82,26 +60,42 @@ def tree(dir_path: Path, prefix: str=''):
             # i.e. space because last, └── , above so no more |
             yield from tree(path, prefix=prefix+extension)
 
+
+def init_pool(image_evaluator, segmentation_evaluator, debug):
+    """Initializer to set global variables in worker processes."""
+    # this is a bit hacky but it works. Basically we load every evaluator
+    # once and put them in a global variable. Then each spawned process can access these 
+    # variables. This means we only load our pytorch model once
+    global _image_evaluator, _segmentation_evaluator, _debug
+    _image_evaluator = image_evaluator
+    _segmentation_evaluator = segmentation_evaluator
+    _debug = debug
+
 def main():
-    # print_inputs()
+    _debug = 'DEBUG' in os.environ and str(os.environ['DEBUG']).lower() in ['1', 'true', 't']
+    nprocs = int(os.environ['NPROCS']) if 'NPROCS' in os.environ and int(os.environ['NPROCS']) > 0 else 4
 
-    print("INPUT DIR")
-    for line in tree(INPUT_DIRECTORY):
-        print(line)
+    if _debug:
+        print("INPUT DIR")
+        for line in tree(INPUT_DIRECTORY):
+            print(line)
 
-    print("")
+        print("")
 
-    print("OUTPUT DIR")
-    for line in tree(OUTPUT_DIRECTORY):
-        print(line)
+        print("OUTPUT DIR")
+        for line in tree(OUTPUT_DIRECTORY):
+            print(line)
 
-    print("")
-    print("GT DIR")
-    for line in tree(GROUND_TRUTH_DIRECTORY):
-        print(line)
+        print("")
+        print("GT DIR")
+        for line in tree(GROUND_TRUTH_DIRECTORY):
+            print(line)
+
+        print(f"Running {nprocs} process{'' if nprocs==1 else 'es'}")
 
     metrics = {}
     predictions = read_predictions()
+
 
     # We now process each algorithm job for this submission
     # Note that the jobs are not in any order!
@@ -110,34 +104,78 @@ def main():
     # Start a number of process workers, using multiprocessing
     # The optimal number of workers ultimately depends on how many
     # resources each process() would call upon
+    # global _image_evaluator, _segmentation_evaluator
+    _image_evaluator = ImageMetrics(debug=_debug)
+
+    _segmentation_evaluator = SegmentationMetrics(debug=_debug)
 
     metrics['results'] = []
-    for p in predictions:
-        metrics['results'].append(process(p))
-    # with NestablePool(processes=2) as pool:
-    #     try:
-    #         metrics["results"] = pool.map(process, predictions)
-    #     except KeyboardInterrupt:
-    #         print('Caught Ctrl+C, shutting pool down...')
-    #         pool.terminate()
-    #         pool.join()
+    # for p in predictions:
+    #     metrics['results'].append(process(p))
+    with torch.multiprocessing.Pool(processes=nprocs, initializer=init_pool, initargs=(_image_evaluator, _segmentation_evaluator, _debug)) as pool:
+        try:
+            metrics["results"] = pool.map(process, predictions)
+        except KeyboardInterrupt:
+            print('Caught Ctrl+C, shutting pool down...')
+            pool.terminate()
+            pool.join()
 
-    print(metrics)
+    if _debug:
+        print(metrics)
     # Now generate an overall score(s) for this submission
-    metrics["aggregates"] = {}# "my_metric": mean(result["my_metric"] for result in metrics["results"])
+
+    aggregate_functions = [
+        {
+            'name': 'mean',
+            'function': np.mean
+        },
+        {
+            'name': 'max',
+            'function': np.max
+        },
+        {
+            'name': 'min',
+            'function': np.min
+        },
+        {
+            'name': 'std',
+            'function': np.std
+        },
+        {
+            'name': '25pc',
+            'function': partial(np.quantile, q=0.25)
+        },
+        {
+            'name': '50pc',
+            'function': partial(np.quantile, q=0.50)
+        },
+        {
+            'name': '75pc',
+            'function': partial(np.quantile, q=0.75)
+        },
+        {
+            'name': 'count',
+            'function': len
+        },
+
+    ]
+    metrics["aggregates"] = {}
     
     if len(metrics['results']) > 0:
         for metric in metrics["results"][0].keys():
-            metrics["aggregates"][metric] = mean(result[metric] for result in metrics["results"])
+            metrics["aggregates"][metric] = {}
+            all_results = [result[metric] for result in metrics["results"]]
+            for aggregate_function in aggregate_functions:
+                metrics["aggregates"][metric][aggregate_function['name']] = aggregate_function['function'](all_results)
 
 
-    print(metrics)
+    if _debug:
+        print(metrics)
 
     # Make sure to save the metrics
     write_metrics(metrics=metrics)
 
     return 0
-
 
 def process(job):
     # Processes a single algorithm job, looking at the outputs
@@ -170,16 +208,15 @@ def process(job):
     mask = load_image_file_directly(location=GROUND_TRUTH_DIRECTORY / "mask" / f"{patient_id}.mha", set_orientation=(spacing, origin, direction))
 
     # score the subject based on image metrics
-    image_evaluator = ImageMetrics()
-    image_metrics = image_evaluator.score_patient(gt_img, synthetic_ct, mask)
-    print(patient_id, image_metrics)
+    image_metrics = _image_evaluator.score_patient(gt_img, synthetic_ct, mask)
+    # print(patient_id, image_metrics)
 
     gc.collect()
     #... and segmentation metrics
-    segmentation_evaluator = SegmentationMetrics()
-    seg_metrics = segmentation_evaluator.score_patient(full_sct_path, mask, gt_segmentation, patient_id, orientation=(spacing, origin, direction))
+    seg_metrics = _segmentation_evaluator.score_patient(full_sct_path, mask, gt_segmentation, patient_id, orientation=(spacing, origin, direction))
 
-    print(seg_metrics)
+    if _debug:
+        print(patient_id, {**image_metrics, **seg_metrics})
     # Finally, return the results
     gc.collect()
     return {

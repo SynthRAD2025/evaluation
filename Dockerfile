@@ -4,6 +4,7 @@ FROM --platform=linux/amd64 docker.io/library/python:3.11-slim
 ENV PYTHONUNBUFFERED 1
 
 RUN groupadd -r user && useradd -m --no-log-init -r -g user user
+RUN apt-get update && apt-get install -y nano g++
 USER user
 
 WORKDIR /opt/app
@@ -24,6 +25,6 @@ COPY --chown=user:user nnUNet /opt/app/
 COPY --chown=user:user evaluate.py /opt/app/
 COPY --chown=user:user image_metrics.py /opt/app/
 COPY --chown=user:user segmentation_metrics.py /opt/app/
-
+COPY --chown=user:user ts_utils.py /opt/app/
 
 ENTRYPOINT ["python", "evaluate.py"]

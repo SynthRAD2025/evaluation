@@ -9,10 +9,10 @@ from scipy.signal import fftconvolve
 from scipy.ndimage import uniform_filter
 
 class ImageMetrics():
-    def __init__(self):
+    def __init__(self, debug=False):
         # Use fixed wide dynamic range
         self.dynamic_range = [-1024., 3000.]
-    
+        self.debug = debug
     def score_patient(self, gt_img, synthetic_ct, mask):        
         assert gt_img.shape == synthetic_ct.shape 
         if mask is not None:
@@ -32,19 +32,19 @@ class ImageMetrics():
                                mask,
                                use_population_range=True)
         
-        ssim_value = self.ssim(ground_truth,
-                               prediction, 
-                               mask)
+        # ssim_value = self.ssim(ground_truth,
+        #                        prediction, 
+        #                        mask)
         ms_ssim_value, ms_ssim_mask_value = self.ms_ssim(ground_truth,
                                prediction, 
                                mask)
 
         return {
             'mae': mae_value,
-            'ssim': ssim_value,
+            # 'ssim': ssim_value,
             'psnr': psnr_value,
-            'ms_ssim': ms_ssim_value,
-            'ms_ssim (mask)': ms_ssim_mask_value,
+            'ms_ssim': ms_ssim_mask_value,
+            # 'ms_ssim (mask)': ms_ssim_mask_value,
         }
     
     def mae(self,
@@ -185,9 +185,9 @@ class ImageMetrics():
             uyy = filter_func(im2 * im2, **filter_args)
             uxy = filter_func(im1 * im2, **filter_args)
             vx = cov_norm * (uxx - ux * ux)
-            vxsqrt = np.clip(vx, a_min=0, a_max=None) ** 0.5 #cov_norm * (uxx - ux * ux)
+            vxsqrt = np.clip(vx, a_min=0, a_max=None) ** 0.5 # TODO: this is very ugly
             vy = cov_norm * (uyy - uy * uy)
-            vysqrt = np.clip(vy, a_min=0, a_max=None) ** 0.5 #cov_norm * (uyy - uy * uy)
+            vysqrt = np.clip(vy, a_min=0, a_max=None) ** 0.5 # TODO: this is very ugly
             vxy = cov_norm * (uxy - ux * uy)
 
             R = data_range
@@ -195,7 +195,7 @@ class ImageMetrics():
             C2 = (K2 * R) ** 2
             C3 = C2 / 2
 
-            L = np.clip((2 * ux * uy + C1) / (ux * ux + uy * uy + C1), a_min=0, a_max=None) # TODO is this necessary or do we increase K1 and K2?
+            L = np.clip((2 * ux * uy + C1) / (ux * ux + uy * uy + C1), a_min=0, a_max=None) # TODO is this clipping necessary or do we increase K1 and K2?
 
             C = np.clip((2 * vxsqrt * vysqrt + C2) / (vx + vy + C2), a_min=0, a_max=None)
             S = np.clip((vxy + C3) / (vxsqrt * vysqrt + C3), a_min=0, a_max=None)
