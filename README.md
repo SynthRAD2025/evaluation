@@ -115,7 +115,7 @@ docker run --gpus all -v /full/path/to/input:/input -v /full/path/to/output:/out
 The `--gpus all` is optional and can be passed when the machine the docker image runs on has a capable GPU (Nvidia, >= Ampere, >= 8GB VRAM)
 
 <!-- RANKING -->
-## Usage: Ranking
+## Ranking
 
 * Export the leaderboard of the to be ranked task to a `.csv` file.
 * Change the path in `rank_teams.py` file to this file
