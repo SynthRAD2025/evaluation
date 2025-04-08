@@ -43,9 +43,7 @@
 * [Getting Started](#getting-started)
   * [Dependencies](#prerequisites)
   * [Installation](#installation)
-* [Usage](#usage)
-  * [Function Descriptions](#functions-descriptions)
-* [Roadmap](#roadmap)
+* [Ranking](#ranking)
 * [Contributing](#contributing)
 * [License](#license)
 * [Contact](#contact)
@@ -116,6 +114,13 @@ docker run --gpus all -v /full/path/to/input:/input -v /full/path/to/output:/out
 
 The `--gpus all` is optional and can be passed when the machine the docker image runs on has a capable GPU (Nvidia, >= Ampere, >= 8GB VRAM)
 
+## Usage: Ranking
+
+* Export the leaderboard of the to be ranked task to a `.csv` file.
+* Change the path in `rank_teams.py` file to this file
+* Run `rank_teams.py`
+
+
 <!-- CONTRIBUTING -->
 ## Contributing
 
@@ -137,7 +142,7 @@ Distributed under the MIT. See `LICENSE` for more information.
 ## Contact
 
 Maarten Terpstra - m.l.terpstra-5@umcutrecht.nl  
-Matteo Maspero - [@matteomasperonl](https://twitter.com/matteomasperonl) - m.maspero@umcutrecht.nl
+Matteo Maspero - [@matteomasperonl](https://tw - m.maspero@umcutrecht.nl
 
 Project Link: [https://github.com/SynthRAD2025/evaluation](https://github.com/SynthRAD2025/evaluation)
 
