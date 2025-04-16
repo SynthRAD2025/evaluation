@@ -56,8 +56,9 @@ class MinialTotalSegmentator():
         plans = load_json(join(model_training_output_dir, 'plans.json'))
         plans_manager = PlansManager(plans)
 
-        checkpoint = torch.load(join(model_training_output_dir, f'fold_0', checkpoint_name),
-                        map_location=torch.device('cpu'))
+        with torch.serialization.safe_globals([np.core.multiarray.scalar, np.dtype, np.dtypes.Float64DType,np.dtypes.Float32DType]):
+            checkpoint = torch.load(join(model_training_output_dir, f'fold_0', checkpoint_name),
+                            map_location=torch.device('cpu'))
         configuration_name = checkpoint['init_args']['configuration']
         trainer_name = checkpoint['trainer_name']
         configuration_manager = plans_manager.get_configuration(configuration_name)

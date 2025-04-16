@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# import SimpleITK
 import numpy as np
 import totalsegmentator
 from typing import Optional
-# from skimage.metrics import peak_signal_noise_ratio, structural_similarity
-# from skimage.util.arraycrop import crop
 import nibabel as nib
 import os
 import torch
@@ -21,19 +18,43 @@ class SegmentationMetrics():
         self.dynamic_range = [-1024., 3000.]
         self.my_ts = MinialTotalSegmentator(verbose=self.debug)
 
+        self.classes_to_use = {
+            "AB": [
+                2, # kidney right
+                3, # kidney left
+                5, # liver
+                6, # stomach
+                *range(10, 14+1), #lungs
+                *range(26, 50+1), #vertebrae
+                79, # spinal cord
+                *range(92, 115+1), # ribs
+                116 #sternum
+            ],
+            "HN": [
+                *range(26, 50+1), #vertebrae
+                79, #spinal cord
+                90, # brain
+                91, # skull
+            ],
+            "TH": [
+                5, # liver
+                6, # stomach
+                *range(10, 14+1), #lungs
+                *range(26, 50+1), #vertebrae
+                79, # spinal cord
+                *range(92, 115+1), # ribs
+                116 #sternum
+            ]
+        }
+
     
     def score_patient(self, synthetic_ct_location, mask, gt_segmentation, patient_id, orientation=None):        
         # Calculate segmentation metrics
         # Perform segmentation using TotalSegmentator, enforce the orientation of the ground-truth on the output
 
-        #BEFORE environ({'PATH': '/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'HOSTNAME': 'd47f3a4364cd', 'LANG': 'C.UTF-8', 'GPG_KEY': 'A035C8C19219BA821ECEA86B64E628F8D684696D', 'PYTHON_VERSION': '3.11.10', 'PYTHON_SHA256': '07a4356e912900e61a15cb0949a06c4a05012e213ecd6b4e84d0f67aabbee372', 'PYTHONUNBUFFERED': '1', 'HOME': '/home/user', 'GDCM_RESOURCES_PATH': '/home/user/.local/lib/python3.11/site-packages/_gdcm/XML'})
-
-        # print('BEFORE', os.environ)
+        anatomy = patient_id[1:3].upper()
         with torch.no_grad():
             pred_seg=self.my_ts.score_patient(synthetic_ct_location, orientation)
-            # pred_seg = ts(input=synthetic_ct_location, output=None, orientation=orientation, ml=True, fast=True, skip_saving=True, nr_thr_resamp=1, nr_thr_saving=1, verbose=False, quiet=True)
-        # print('AFTER', os.environ)
-        #AFTER environ({'PATH': '/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'HOSTNAME': 'd47f3a4364cd', 'LANG': 'C.UTF-8', 'GPG_KEY': 'A035C8C19219BA821ECEA86B64E628F8D684696D', 'PYTHON_VERSION': '3.11.10', 'PYTHON_SHA256': '07a4356e912900e61a15cb0949a06c4a05012e213ecd6b4e84d0f67aabbee372', 'PYTHONUNBUFFERED': '1', 'HOME': '/home/user', 'GDCM_RESOURCES_PATH': '/home/user/.local/lib/python3.11/site-packages/_gdcm/XML', 'nnUNet_raw': '/home/user/.totalsegmentator/nnunet/results', 'nnUNet_preprocessed': '/home/user/.totalsegmentator/nnunet/results', 'nnUNet_results': '/home/user/.totalsegmentator/nnunet/results', 'KMP_DUPLICATE_LIB_OK': 'True', 'KMP_INIT_AT_FORK': 'FALSE'})
 
         # Retrieve the data in the NiftiImage from nibabel
         if isinstance(pred_seg, Nifti1Image):
@@ -46,8 +67,8 @@ class SegmentationMetrics():
         gt_seg = gt_segmentation.cpu().detach() if torch.is_tensor(gt_segmentation) else torch.from_numpy(gt_segmentation).cpu().detach()
         pred_seg = pred_seg.cpu().detach() if torch.is_tensor(pred_seg) else torch.from_numpy(pred_seg).cpu().detach()
 
-        # Convert to one-hot tensors
-        classes = gt_seg.unique()
+
+        assert gt_seg.shape == pred_seg.shape
         if orientation is not None:
             spacing, origin, direction = orientation
         else:
@@ -66,8 +87,12 @@ class SegmentationMetrics():
         ]
 
         # Evaluate each one-hot metric 
-        for c in classes:
+        for c in self.classes_to_use[anatomy]:
             gt_tensor = (gt_seg == c).view(1, 1, *gt_seg.shape)
+            if gt_tensor.sum() == 0:
+                if self.debug:
+                    print(f"No {c} in {patient_id}")
+                continue
             est_tensor = (pred_seg == c).view(1, 1, *pred_seg.shape)
             for metric in metrics:
                 metric['f'](est_tensor, gt_tensor, **metric['kwargs'] if 'kwargs' in metric else {})

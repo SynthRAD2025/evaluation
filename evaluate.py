@@ -110,8 +110,7 @@ def main():
     _segmentation_evaluator = SegmentationMetrics(debug=_debug)
 
     metrics['results'] = []
-    # for p in predictions:
-    #     metrics['results'].append(process(p))
+
     with torch.multiprocessing.Pool(processes=nprocs, initializer=init_pool, initargs=(_image_evaluator, _segmentation_evaluator, _debug)) as pool:
         try:
             metrics["results"] = pool.map(process, predictions)
@@ -122,8 +121,10 @@ def main():
 
     if _debug:
         print(metrics)
-    # Now generate an overall score(s) for this submission
 
+    # Now generate an overall score(s) for this submission. 
+    # For every case in the dataset, we have a metric. For each metric,
+    # The aggregates listed below are computed over the entire dataset
     aggregate_functions = [
         {
             'name': 'mean',
@@ -161,6 +162,7 @@ def main():
     ]
     metrics["aggregates"] = {}
     
+
     if len(metrics['results']) > 0:
         for metric in metrics["results"][0].keys():
             metrics["aggregates"][metric] = {}
@@ -209,7 +211,6 @@ def process(job):
 
     # score the subject based on image metrics
     image_metrics = _image_evaluator.score_patient(gt_img, synthetic_ct, mask)
-    # print(patient_id, image_metrics)
 
     gc.collect()
     #... and segmentation metrics

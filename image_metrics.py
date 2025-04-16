@@ -32,19 +32,14 @@ class ImageMetrics():
                                mask,
                                use_population_range=True)
         
-        # ssim_value = self.ssim(ground_truth,
-        #                        prediction, 
-        #                        mask)
         ms_ssim_value, ms_ssim_mask_value = self.ms_ssim(ground_truth,
                                prediction, 
                                mask)
 
         return {
             'mae': mae_value,
-            # 'ssim': ssim_value,
             'psnr': psnr_value,
             'ms_ssim': ms_ssim_mask_value,
-            # 'ms_ssim (mask)': ms_ssim_mask_value,
         }
     
     def mae(self,
@@ -125,6 +120,8 @@ class ImageMetrics():
         pred = pred[mask==1]
         psnr_value = peak_signal_noise_ratio(gt, pred, data_range=dynamic_range)
         return float(psnr_value)
+
+    # Compute the luminance, contrast and structure components of the SSIM between two images    
     def structural_similarity_at_scale(self, im1,
         im2,
         *,
@@ -212,6 +209,7 @@ class ImageMetrics():
             return mssim
 
 
+    # Compute the masked MS-SSIM by masking the SSIM at every resolution level
     def ms_ssim(self, gt: np.ndarray, pred: np.ndarray, mask: Optional[np.ndarray] = None, scale_weights: Optional[np.ndarray] = None) -> float:
         # Clip gt and pred to the dynamic range
         gt = np.clip(gt, min(self.dynamic_range), max(self.dynamic_range))
@@ -235,7 +233,7 @@ class ImageMetrics():
 
 
         # see Eq. 7 in https://live.ece.utexas.edu/publications/2003/zw_asil2003_msssim.pdf
-        # Also, the final sentence above section 4 (Results)
+        # Also, the final sentence of section 3.2 (Results)
         scale_weights = np.array([0.0448, 0.2856, 0.3001, 0.2363, 0.1333]) if scale_weights is None else scale_weights
         luminance_weights = np.array([0, 0, 0, 0, 0, 0.1333]) if scale_weights is None else scale_weights 
         levels = len(scale_weights)
@@ -266,11 +264,15 @@ class ImageMetrics():
                 structure_weight=scale_weights[level],
                 data_range=dynamic_range, full=True)
             pad = 3
+            # at every level, we get the ssim_value_full, which is just mean SSIM at a level L, and the 
+            # SSIM map. The masked SSIM is the mean SSIM within this mask
             ssim_value_masked  = (crop(ssim_map, pad)[crop(mask, pad).astype(bool)]).mean(dtype=np.float64)
 
             ms_ssim_vals.append(ssim_value_full)
             ms_ssim_maps.append(ssim_value_masked)
 
+            # The images are cleverly downsampled using an uniform filter
+            # the mask is just downsampled by selecting every other line in every dimension
             filtered = [fftconvolve(im, downsample_filter, mode='same')
                 for im in [gt, pred]]
             gt, pred, mask = [x[::2, ::2, ::2] for x in [*filtered, mask]]
@@ -280,57 +282,6 @@ class ImageMetrics():
 
         return float(ms_ssim_val), float(ms_ssim_mask_val)
 
-    def ssim(self,
-              gt: np.ndarray, 
-              pred: np.ndarray,
-              mask: Optional[np.ndarray] = None) -> float:
-        """
-        Compute Structural Similarity Index Metric (SSIM)
-    
-        Parameters
-        ----------
-        gt : np.ndarray
-            Ground truth
-        pred : np.ndarray
-            Prediction
-        mask : np.ndarray, optional
-            Mask for voxels to include. The default is None (including all voxels).
-    
-        Returns
-        -------
-        ssim : float
-            structural similarity index metric.
-    
-        """
-        # Clip gt and pred to the dynamic range
-        gt = np.clip(gt, min(self.dynamic_range), max(self.dynamic_range))
-        pred = np.clip(pred, min(self.dynamic_range), max(self.dynamic_range))
-
-        if mask is not None:
-            #binarize mask
-            mask = np.where(mask>0, 1., 0.)
-            
-            # Mask gt and pred
-            gt = np.where(mask==0, min(self.dynamic_range), gt)
-            pred = np.where(mask==0, min(self.dynamic_range), pred)
-
-        # Make values non-negative
-        if min(self.dynamic_range) < 0:
-            gt = gt - min(self.dynamic_range)
-            pred = pred - min(self.dynamic_range)
-
-        # Set dynamic range for ssim calculation and calculate ssim_map per pixel
-        dynamic_range = self.dynamic_range[1] - self.dynamic_range[0]
-        ssim_value_full, ssim_map = structural_similarity(gt, pred, data_range=dynamic_range, full=True)
-
-        if mask is not None:
-            # Follow skimage implementation of calculating the mean value:  
-            # crop(ssim_map, pad).mean(dtype=np.float64), with pad=3 by default.
-            pad = 3
-            ssim_value_masked  = (crop(ssim_map, pad)[crop(mask, pad).astype(bool)]).mean(dtype=np.float64)
-            return float(ssim_value_masked)
-        else:
-            return float(ssim_value_full)
 
 if __name__=='__main__':
     metrics = ImageMetrics()
