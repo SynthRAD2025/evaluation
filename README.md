@@ -126,7 +126,7 @@ Distributed under the MIT. See `LICENSE` for more information.
 ## Contact
 
 Maarten Terpstra - m.l.terpstra-5@umcutrecht.nl  
-Matteo Maspero - [@matteomasperonl](https://tw - m.maspero@umcutrecht.nl
+Matteo Maspero - [@matteomasperonl](https://bsky.app/profile/matteomaspero.bsky.social) - m.maspero@umcutrecht.nl
 
 Project Link: [https://github.com/SynthRAD2025/evaluation](https://github.com/SynthRAD2025/evaluation)
 
