@@ -61,19 +61,20 @@ def tree(dir_path: Path, prefix: str=''):
             yield from tree(path, prefix=prefix+extension)
 
 
-def init_pool(image_evaluator, segmentation_evaluator, debug):
+def init_pool(image_evaluator, segmentation_evaluator, debug, has_predictions):
     """Initializer to set global variables in worker processes."""
     # this is a bit hacky but it works. Basically we load every evaluator
     # once and put them in a global variable. Then each spawned process can access these 
     # variables. This means we only load our pytorch model once
-    global _image_evaluator, _segmentation_evaluator, _debug
+    global _image_evaluator, _segmentation_evaluator, _debug, _has_predictions
     _image_evaluator = image_evaluator
     _segmentation_evaluator = segmentation_evaluator
     _debug = debug
+    _has_predictions = has_predictions
 
 def main():
     _debug = 'DEBUG' in os.environ and str(os.environ['DEBUG']).lower() in ['1', 'true', 't']
-    nprocs = int(os.environ['NPROCS']) if 'NPROCS' in os.environ and int(os.environ['NPROCS']) > 0 else 4
+    nprocs = int(os.environ['NPROCS']) if 'NPROCS' in os.environ and int(os.environ['NPROCS']) > 0 else 2
 
     if _debug:
         print("INPUT DIR")
@@ -91,10 +92,26 @@ def main():
         for line in tree(GROUND_TRUTH_DIRECTORY):
             print(line)
 
-        print(f"Running {nprocs} process{'' if nprocs==1 else 'es'}")
+
+        if os.path.isfile(INPUT_DIRECTORY / "inputs.json"):
+            print("")
+            print("Found inputs.json. Contents: ")
+            with open(INPUT_DIRECTORY / "inputs.json", 'r') as f:
+                j = json.loads(f.read())
+
+            print(json.dumps(j, indent=2))
+            print("")
+
+    print(f"Running {nprocs} process{'' if nprocs==1 else 'es'}")
 
     metrics = {}
-    predictions = read_predictions()
+    if os.path.isfile(INPUT_DIRECTORY / "predictions.json"):
+        predictions = read_predictions()
+        has_predictions = True
+    else:
+        print(f"We're in a prediction-only phase. Reading files directly from {INPUT_DIRECTORY}")
+        predictions = glob(str(INPUT_DIRECTORY / "*.mha"))
+        has_predictions = False
 
 
     # We now process each algorithm job for this submission
@@ -111,7 +128,7 @@ def main():
 
     metrics['results'] = []
 
-    with torch.multiprocessing.Pool(processes=nprocs, initializer=init_pool, initargs=(_image_evaluator, _segmentation_evaluator, _debug)) as pool:
+    with torch.multiprocessing.Pool(processes=nprocs, initializer=init_pool, initargs=(_image_evaluator, _segmentation_evaluator, _debug, has_predictions)) as pool:
         try:
             metrics["results"] = pool.map(process, predictions)
         except KeyboardInterrupt:
@@ -187,23 +204,34 @@ def process(job):
     report += "\n"
 
     # Firstly, find the location of the results
-    synthetic_ct_location = get_file_location(
-            job_pk=job["pk"],
-            values=job["outputs"],
-            slug="synthetic-ct-image",
-        )
+    if _has_predictions:
+        synthetic_ct_location = get_file_location(
+                job_pk=job["pk"],
+                values=job["outputs"],
+                slug="synthetic-ct-image",
+            )
+    else:
+        synthetic_ct_location = job
 
     # Extract the patient ID
-    patient_id = find_patient_id(values=job["inputs"], slug='body')
+    if _has_predictions:
+        patient_id = find_patient_id(values=job["inputs"], slug='body')
+    else:
+        # filename is like "/input/sct_1HNXxxx.mha"
+        patient_id = job.split('/')[-1].split('.')[0][-7:]
 
     # and load the ground-truth along the affine image matrix (Or direction/origin/spacing in SimpleITK terms)
     gt_img, spacing, origin, direction = load_image_file_directly(location=GROUND_TRUTH_DIRECTORY / "ct" / f"{patient_id}.mha", return_orientation=True)
 
-    # Then, read the sCT and impose the spatial dimension of the ground truth
-    synthetic_ct, full_sct_path = load_image_file(
-        location=synthetic_ct_location, spacing=spacing, origin=origin, direction=direction
-    )
-    
+    if _has_predictions:
+        # Then, read the sCT and impose the spatial dimension of the ground truth
+        synthetic_ct, full_sct_path = load_image_file(
+            location=synthetic_ct_location, spacing=spacing, origin=origin, direction=direction
+        )
+    else:
+        synthetic_ct = load_image_file_directly(location=synthetic_ct_location, set_orientation=(spacing, origin, direction))
+        full_sct_path = synthetic_ct_location
+
     # Do the same for the ground-truth TotalSegmentator segmentation and the mask
     gt_segmentation = load_image_file_directly(location=GROUND_TRUTH_DIRECTORY / "segmentation" / f"{patient_id}.mha", set_orientation=(spacing, origin, direction))
 

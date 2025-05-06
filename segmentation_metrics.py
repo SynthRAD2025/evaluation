@@ -93,20 +93,28 @@ class SegmentationMetrics():
             }
         ]
 
-        # Evaluate each one-hot metric 
-        for c in self.classes_to_use[anatomy]:
-            gt_tensor = (gt_seg == c).view(1, 1, *gt_seg.shape)
-            if gt_tensor.sum() == 0:
-                if self.debug:
-                    print(f"No {c} in {patient_id}")
-                continue
-            est_tensor = (pred_seg == c).view(1, 1, *pred_seg.shape)
-            for metric in metrics:
-                metric['f'](est_tensor, gt_tensor, **metric['kwargs'] if 'kwargs' in metric else {})
-
-        # aggregate the mean metrics for the patient over the classes
+        has_classes = any((gt_seg == c).sum() > 0 for c in self.classes_to_use[anatomy])
         result = {}
-        for metric in metrics:
-            result[metric['name']] = metric['f'].aggregate().item()
-            metric['f'].reset()
+
+        if has_classes:
+            # Evaluate each one-hot metric 
+            for c in self.classes_to_use[anatomy]:
+                gt_tensor = (gt_seg == c).view(1, 1, *gt_seg.shape)
+                if gt_tensor.sum() == 0:
+                    if self.debug:
+                        print(f"No {c} in {patient_id}")
+                    continue
+                est_tensor = (pred_seg == c).view(1, 1, *pred_seg.shape)
+                for metric in metrics:
+                    metric['f'](est_tensor, gt_tensor, **metric['kwargs'] if 'kwargs' in metric else {})
+
+            # aggregate the mean metrics for the patient over the classes
+            for metric in metrics:
+                result[metric['name']] = metric['f'].aggregate().item()
+                metric['f'].reset()
+
+        else:
+            print(f"Warning: patient {patient_id} has no selected classes for anatomy {anatomy}")
+            for metric in metrics:
+                result[metric['name']] = 0
         return result
