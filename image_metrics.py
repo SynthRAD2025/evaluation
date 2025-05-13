@@ -11,7 +11,7 @@ from scipy.ndimage import uniform_filter
 class ImageMetrics():
     def __init__(self, debug=False):
         # Use fixed wide dynamic range
-        self.dynamic_range = [-1024., 3000.]
+        self.dynamic_range = [-1024., 3071.]
         self.debug = debug
     def score_patient(self, gt_img, synthetic_ct, mask):        
         assert gt_img.shape == synthetic_ct.shape 
